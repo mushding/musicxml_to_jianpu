@@ -3,8 +3,6 @@
 from lxml import etree
 import zipfile
 
-pre_mutinote = 0
-
 MUSICXML_FIFTHS_TABLE = {
     0: 'C',
     # sharps
@@ -28,7 +26,6 @@ class Attributes:
             'timesig': self._getTimeSignature(prev_attributes),
             'divisions': self._getDivisions(prev_attributes)
         }
-        self.accidental = None
 
     def _getDivisions(self, prev_attributes):
         divisions = self._elem.find('divisions')
@@ -54,11 +51,6 @@ class Attributes:
                 return prev_attributes.getTimeSignature()
             raise MusicXMLParseError("time not found in attribute")
         return "%s/%s" % (beats.text, beat_type.text)
-
-    def getAccidental(self,accidental):
-        if accidental is not None and len(accidental) > 0:
-            self.accidental = accidental
-        return self.accidental
 
     def getDivisions(self):
         return self._cache['divisions']
@@ -88,13 +80,9 @@ ACCIDENTAL_TABLE = {
 class Note:
 
     def __init__(self, elem, attributes):
-        global pre_mutinote
         assert(elem.tag == 'note')
         self._elem = elem
         self._attributes = attributes
-        # self._mutinote = mutinote
-        # self._pre_mutinote = pre_mutinote
-        # pre_mutinote = self._mutinote
 
     def _get_int(self, path):
         return int(self._elem.find(path).text)
@@ -136,15 +124,8 @@ class Note:
         """ return a tuple (note divisions, divisions per quarternote) """
         return (self._get_int('duration'), self._attributes.getDivisions())
 
-    def getAccidental(self,accidental):
-        return self._attributes.getAccidental(accidental)
-
     def getPitch(self):
         """ return a tuple (note_name, octave) """
-
-        # if self._mutinote == self._pre_mutinote:
-
-
         step = self._elem.find('pitch/step')
         octave = self._elem.find('pitch/octave')
         if step is None or octave is None:
@@ -175,9 +156,6 @@ class Note:
 
     def getAttributes(self):
         return self._attributes
-
-    def getPreMutinote(self):
-        return self._mutinote
 
 class Measure:
 
@@ -231,8 +209,7 @@ class Measure:
         return self._getBarLine('right')
 
     def __iter__(self):
-        for (index, elem) in enumerate(self._elem.xpath('note'), start=1):
-            # mutinote = self._elem.xpath('//note[' + str(index) + ']/@default-x')
+        for elem in self._elem.xpath('note'):
             yield Note(elem, self.getAttributes())
 
 def readCompressedMusicXML(filename):
