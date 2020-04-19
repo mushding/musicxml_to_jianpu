@@ -11,6 +11,21 @@ MUSICXML_FIFTHS_TABLE = {
     -1: 'F', -2: 'Bb', -3: 'Eb', -4: 'Ab', -5: 'Db', -6: 'Gb',
 }
 
+CHORD_ROOT_ALTER_TABLE = {
+    1: '#',
+    -1: 'b',
+}
+
+CHORD_KIND = {
+    'major': '.',
+    'minor': 'm',
+    'dominant': '7',
+    'minor-seventh': 'm~7',
+    'diminished': 'd~i~m',
+    'diminished-seventh': 'd~i~m~7',
+    'augmented': 'a~u~g',
+}
+
 class MusicXMLParseError(Exception):
     pass
 
@@ -24,7 +39,7 @@ class Attributes:
         self._cache = {
             'keysig': self._getKeySignature(prev_attributes),
             'timesig': self._getTimeSignature(prev_attributes),
-            'divisions': self._getDivisions(prev_attributes)
+            'divisions': self._getDivisions(prev_attributes),
         }
 
     def _getDivisions(self, prev_attributes):
@@ -80,9 +95,13 @@ ACCIDENTAL_TABLE = {
 class Note:
 
     def __init__(self, elem, attributes):
-        assert(elem.tag == 'note')
         self._elem = elem
+        self._elemTag = self._getElemTag()
         self._attributes = attributes
+        self._isNoteChord = self._getIsNoteChord()
+
+    def _getIsNoteChord(self):
+        return self.isNoteChord()
 
     def _get_int(self, path):
         return int(self._elem.find(path).text)
@@ -93,6 +112,9 @@ class Note:
             return None
         else:
             return elem.text
+
+    def _getElemTag(self):
+        return self._elem.tag
 
     def isRest(self):
         return bool(self._elem.xpath('rest'))
@@ -111,6 +133,12 @@ class Note:
 
     def isTupletStop(self):
         return self.isTuplet() and bool(self._elem.xpath("notations/tuplet[@type='stop']"))
+
+    def isGrace(self):
+        return bool(self._elem.xpath("grace"))
+
+    def isNoteChord(self):
+        return bool(self._elem.xpath('chord'))
 
     def getDisplayedDuration(self):
         if not self.isTuplet():
@@ -154,6 +182,24 @@ class Note:
 
         return (note_name, octave)
 
+    def getHarmony(self):
+        harmony_text = []
+        rootChord = self._elem.find('root/root-step')
+        rootAlter = self._elem.find('root/root-alter')
+        kind = self._elem.find('kind')
+        kind = "~" + CHORD_KIND[kind.text]
+
+        if rootAlter is not None:
+            rootAlter = "~" + CHORD_ROOT_ALTER_TABLE[int(rootAlter.text)]
+        else:
+            rootAlter = ""
+
+        harmony_text.append(str(rootChord.text) + str(rootAlter) + str(kind))
+        return harmony_text
+
+    def getElemTag(self):
+        return self._elemTag
+
     def getAttributes(self):
         return self._attributes
 
@@ -179,7 +225,7 @@ class Measure:
             self._attributes = Attributes(attributes_elem, prev_attributes)
         else: # no attribute tag; inherit from previous measure
             self._attributes = prev_attributes
-
+        
         assert(self._attributes is not None)
 
     def getMeasureNumber(self):
@@ -209,7 +255,7 @@ class Measure:
         return self._getBarLine('right')
 
     def __iter__(self):
-        for elem in self._elem.xpath('note'):
+        for elem in self._elem.xpath('note|harmony'):
             yield Note(elem, self.getAttributes())
 
 def readCompressedMusicXML(filename):

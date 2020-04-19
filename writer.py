@@ -3,15 +3,22 @@
 from fractions import Fraction
 from reader import Measure
 
+# enable some Features
+ISBASS = False
+ISCHORD = False
+
 # define the bass part is at the 3rd line
-BASS_PART = 5
+BASS_PART = 3
 CHORD_PART = 4
-PAGE_PER_COLUMN = 2
+PAGE_PER_COLUMN = 4
+MAX_MEASURES_PER_LINE = 5
 IS_FLAT_TO_SHARP = True
 
 accidentList = [[['']*8 for i in range(8)]]
 
 crossMeasureTie = False
+preNoteGrace = ""
+graceFlag = False
 
 STEP_TO_NUMBER = {
     'C': 1,
@@ -31,9 +38,9 @@ def stepToNumberFlat(step):
         return "7"
     return str(STEP_TO_NUMBER[step] - 1)
 
-def generateOctaveMark(octave, isBass=False):
-    
-    if isBass:
+def generateOctaveMark(octave):
+    global ISBASS
+    if ISBASS:
         center_C = 4
     else:
         center_C = 5
@@ -124,23 +131,25 @@ def getTransposeOffsetToC(key):
     else:
         return 12 - degree
 
-def generateBasicNote(note, isBass=False):
+def generateBasicNote(note, isGrace):
     global accidentList
+    time_suffix = ""
+    if not isGrace:
+        (duration, divisions) = getNoteDisplayedDuration(note)
+        time_suffix = generateTimeSuffix(duration, divisions)
 
-    (duration, divisions) = getNoteDisplayedDuration(note)
-    time_suffix = generateTimeSuffix(duration, divisions)
-    
     # Turn flat into all sharp
     if note.isRest():
         return "0" + time_suffix
+    elif ISCHORD:
+        if note.isNoteChord():
+            return ""
+        return "9" + time_suffix
     else:
         pitch = note.getPitch()
         (note_name, octave) = note.getPitch()
 
         keysig = note.getAttributes().getKeySignature()
-        # if keysig != 'C':
-        #     offset = getTransposeOffsetToC(keysig)
-        #     (note_name, octave) = getTransposedPitch(note_name, octave, offset)
 
         step = note_name[0:1] # C, D, E, F, G, A, B
         accidental = note_name[1:2] # sharp (#) and flat (b)
@@ -169,17 +178,35 @@ def generateBasicNote(note, isBass=False):
 
         if accidental == 'b' and IS_FLAT_TO_SHARP:
             if step == 'C':
-                return stepToNumberFlat(step) + generateOctaveMark(octave - 1, isBass) + time_suffix
+                return stepToNumberFlat(step) + generateOctaveMark(octave - 1) + time_suffix
             elif step == 'F':
-                return stepToNumberFlat(step) + generateOctaveMark(octave, isBass) + time_suffix
+                return stepToNumberFlat(step) + generateOctaveMark(octave) + time_suffix
             accidental = '#'
-            return stepToNumberFlat(step) + accidental + generateOctaveMark(octave, isBass) + time_suffix
+            return stepToNumberFlat(step) + accidental + generateOctaveMark(octave) + time_suffix
         else:
-            return stepToNumber(step) + accidental + generateOctaveMark(octave, isBass) + time_suffix
+            return stepToNumber(step) + accidental + generateOctaveMark(octave) + time_suffix
 
-def generateNote(note, isBass=False):
+def generateNote(note):
     global crossMeasureTie
-    result = generateBasicNote(note, isBass)
+    global preNoteGrace
+    global graceFlag
+    isGrace = False
+
+    if note.isGrace():
+        isGrace = True
+
+    result = generateBasicNote(note, isGrace)
+    if graceFlag:
+        if '-' in result:
+            idx = result.index('-')
+            result = result[:idx - 1] + preNoteGrace + result[idx:]
+        else:
+            result = result + preNoteGrace
+        graceFlag = False
+    if note.isGrace():
+        preNoteGrace = " [" + result + "] "
+        graceFlag = True
+        result = ""
     if note.isTieStart():
         result = "( " + result
         crossMeasureTie = True
@@ -197,15 +224,25 @@ def generateNote(note, isBass=False):
             result = result + " )"
     return result
 
-def generateMeasure(measure, isBass=False):
+def generateMeasure(measure):
     global accidentList
     global crossMeasureTie
 
     if not crossMeasureTie:
         accidentList = [['']*8 for i in range(8)]
-
-    pieces = [generateNote(note, isBass) for note in measure]
-    return ' '.join(pieces)
+    
+    pieces = []
+    harmonyArr = []
+    noteNum = 0
+    
+    for note in measure:
+        if note.getElemTag() == "harmony":
+            harmonyArr.append(note.getHarmony() + [noteNum])
+            continue
+        if not note.isNoteChord():
+            noteNum += 1
+        pieces.append(generateNote(note))
+    return ' '.join(pieces), noteNum, harmonyArr
 
 def generateRightBarline(measure):
     if measure.getRightBarlineType() == Measure.BARLINE_REPEAT:
@@ -217,8 +254,10 @@ def generateRightBarline(measure):
     else:
         return "|"
 
-def generateMeasures(measureList, isBass=False):
+def generateMeasures(measureList):
     pieces = []
+    noteNumList = []
+    harmonyArrList = []
     for i, measure in enumerate(measureList):
         if measure.getLeftBarlineType() == Measure.BARLINE_REPEAT:  # see left
             if i == 0:
@@ -226,15 +265,35 @@ def generateMeasures(measureList, isBass=False):
                 pieces.append(":")
             else:
                 pieces.append(":")
+        line, noteNum, harmonyArr = generateMeasure(measure)
+        harmonyArrList.append(harmonyArr)
+        noteNumList.append(noteNum)
 
         pieces.append(" ")                              
-        pieces.append(generateMeasure(measure, isBass))             # see content
+        pieces.append(line)             # see content
         pieces.append(" ")
         pieces.append(generateRightBarline(measure))                # see right
 
-    return ''.join(pieces)
+    return ''.join(pieces), noteNumList, harmonyArrList
 
-def generateBody(reader, max_measures_per_line=5):
+def generateChordHarmony(noteNumList, harmonyArrList):
+    pieces = []
+    last_space = 0
+    for idx, measure in enumerate(harmonyArrList):
+        pre_idx = -1
+        if measure == []:
+            pieces.append("@")
+        else:
+            for note in measure:
+                last_space = note[1]
+                pieces.append('@' * (note[1] - pre_idx - 1))
+                pieces.append(note[0])
+                pre_idx = note[1]
+        pieces.append('@' * (noteNumList[idx] - last_space - 1))
+
+    return "".join(pieces)
+
+def generateBody(reader):
 
     global accidentList
     parts = reader.getPartIdList()
@@ -247,17 +306,29 @@ def generateBody(reader, max_measures_per_line=5):
     column_now = 0
 
     measure_count = max(len(measures) for measures in part_measures.values())
-    for i in range(0, measure_count, max_measures_per_line):
+    for i in range(0, measure_count, MAX_MEASURES_PER_LINE):
         begin = i
-        end = min(i + max_measures_per_line, measure_count)
+        end = min(i + MAX_MEASURES_PER_LINE, measure_count)
         for part_index, part in enumerate(parts):
             accidentList = [['']*8 for i in range(8)]
-            line = "Q%d: " % (part_index + 1)
-            line += '|'
             if part_index + 1 == BASS_PART:
-                line += generateMeasures(part_measures[part][begin:end], isBass = True)   # enter bass part
-            else:   
-                line += generateMeasures(part_measures[part][begin:end])   # other part
+                global ISBASS
+                ISBASS = True
+                line = "Q%d: |" % (part_index + 1)
+                line += generateMeasures(part_measures[part][begin:end])[0]   # enter bass part
+                ISBASS = False
+            elif part_index + 1 == CHORD_PART: 
+                global ISCHORD
+                ISCHORD = True
+                line = "Q%d: |" % (part_index + 1)
+                return_line, noteNumList, harmonyArrList = generateMeasures(part_measures[part][begin:end])
+                line += return_line + "\n"
+                line += "C: "
+                line += generateChordHarmony(noteNumList, harmonyArrList)
+                ISCHORD = False
+            else:
+                line = "Q%d: |" % (part_index + 1)
+                line += generateMeasures(part_measures[part][begin:end])[0]   # other part
             lines.append(line)
         lines.append('') # empty line
         column_now = column_now + 1
